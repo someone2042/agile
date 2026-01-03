@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Medical Analysis</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --danger: #dc2626;
+            --success: #16a34a;
+            --bg: #f8fafc;
+        }
+
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background-color: var(--bg);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 450px;
+            text-align: center;
+        }
+
+        .upload-area {
+            border: 2px dashed #cbd5e1;
+            padding: 2rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            cursor: pointer;
+        }
+
+        #imagePreview {
+            width: 100%;
+            max-height: 300px;
+            object-fit: contain;
+            display: none;
+            margin-bottom: 1rem;
+            border-radius: 4px;
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        button:disabled {
+            background-color: #94a3b8;
+        }
+
+        #result {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            border-radius: 6px;
+            display: none;
+        }
+
+        .cancerous {
+            background: #fee2e2;
+            color: var(--danger);
+            border: 1px solid var(--danger);
+        }
+
+        .non-cancerous {
+            background: #f0fdf4;
+            color: var(--success);
+            border: 1px solid var(--success);
+        }
+
+        .download-box {
+            display: none;
+            margin-top: 20px;
+            padding: 15px;
+            border-top: 1px solid #eee;
+        }
+
+        select {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+        <h2>Medical AI Analyzer</h2>
+
+        <select id="language">
+            <option value="English">English</option>
+            <option value="French">French</option>
+            <option value="Arabic">Arabic</option>
+        </select>
+
+        <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+            <img id="imagePreview" src="">
+            <div id="uploadPrompt"><span>Click to upload scan</span></div>
+            <input type="file" id="fileInput" hidden accept="image/*">
+        </div>
+
+        <button id="analyzeBtn" disabled>Analyze Image</button>
+
+        <div id="result"></div>
+
+        <div id="downloadBox" class="download-box">
+            <p style="font-size: 0.9rem; color: #666;">Analysis Complete. Download report:</p>
+            <select id="reportType">
+                <option value="pdf">PDF Document</option>
+                <option value="word">Word Document</option>
+            </select>
+            <button id="downloadBtn" style="background-color: #475569;">Download Report</button>
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const imagePreview = document.getElementById('imagePreview');
+        const uploadPrompt = document.getElementById('uploadPrompt');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        const resultDiv = document.getElementById('result');
+        const downloadBox = document.getElementById('downloadBox');
+
+        let globalAnalysisData = null;
+
+        // 1. HANDLE IMAGE UPLOAD & PREVIEW
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    imagePreview.src = e.target.result;
+                    imagePreview.style.display = 'block';
+                    uploadPrompt.style.display = 'none';
+                    analyzeBtn.disabled = false;
+                    resultDiv.style.display = 'none';
+                    downloadBox.style.display = 'none';
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // 2. ANALYZE ACTION
+        analyzeBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            const lang = document.getElementById('language').value;
+            if (!file) return;
+
+            analyzeBtn.disabled = true;
+            analyzeBtn.innerText = "Analyzing with AI...";
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('language', lang);
+
+            try {
+                const response = await fetch('http://localhost:8000/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await response.json();
+
+                globalAnalysisData = data; // Store for download
+
+                // Update UI Colors
+                resultDiv.style.display = 'block';
+                resultDiv.className = data.prediction.toLowerCase() === 'cancerous' ? 'cancerous' : 'non-cancerous';
+                resultDiv.innerHTML = `<strong>Result: ${data.prediction.toUpperCase()}</strong><br>Confidence: ${(data.confidence * 100).toFixed(2)}%`;
+
+                // Show Download Section
+                downloadBox.style.display = 'block';
+            } catch (err) {
+                alert("Connection error to server");
+            } finally {
+                analyzeBtn.disabled = false;
+                analyzeBtn.innerText = "Analyze Image";
+            }
+        });
+
+        // 3. DOWNLOAD ACTION
+        document.getElementById('downloadBtn').addEventListener('click', async () => {
+            const type = document.getElementById('reportType').value;
+
+            const formData = new FormData();
+            formData.append('report_text', globalAnalysisData.report_text);
+            formData.append('report_type', type);
+            formData.append('label', globalAnalysisData.prediction);
+            formData.append('confidence', globalAnalysisData.confidence);
+
+            const response = await fetch('http://localhost:8000/generate_report', {
+                method: 'POST',
+                body: formData
+            });
+
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `Medical_Report.${type === 'pdf' ? 'pdf' : 'docx'}`;
+            a.click();
+        });
+    </script>
+</body>
+
+</html>

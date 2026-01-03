@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+tensorflow
+numpy
+Pillow
+huggingface-hub
+google-genai
+fpdf2
+markdown
+python-docx
+beautifulsoup4
