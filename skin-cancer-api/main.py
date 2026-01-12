@@ -14,6 +14,11 @@ from fpdf import FPDF
 from markdown import markdown
 from docx import Document
 from bs4 import BeautifulSoup
+import arabic_reshaper
+from bidi.algorithm import get_display
+from fpdf import FPDF
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 def add_markdown_to_word(document, md_text):
     """
@@ -47,7 +52,7 @@ def add_markdown_to_word(document, md_text):
             for li in element.find_all('li'):
                 document.add_paragraph(li.get_text(), style='List Number')
 
-GEMINI_API_KEY = "dir api key dyallek"
+GEMINI_API_KEY = "dir api dyalek hna"
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 app = FastAPI()
@@ -81,7 +86,28 @@ except Exception as e:
     print(f"❌ LOADING ERROR: {e}")
 
 
+def fix_text(text):
+    """
+    Reshapes Arabic text to connect letters and reverses it for RTL display.
+    """
+    try:
+        reshaped_text = arabic_reshaper.reshape(text)
+        bidi_text = get_display(reshaped_text)
+        return bidi_text
+    except:
+        return text
 
+class PDF(FPDF):
+    def header(self):
+        # NOTE: You must register the font in the setup first
+        # We use the font name 'ArabicFont' defined below
+        try:
+            self.set_font("ArabicFont", "", 12) 
+        except:
+            self.set_font("Arial", "B", 12) # Fallback if font fails
+            
+        self.cell(0, 10, "AI Medical Analysis Report", border=False, ln=True, align="C")
+        self.ln(5)
 
 @app.get("/")
 async def health():
@@ -89,9 +115,11 @@ async def health():
 
 
 @app.post("/analyze")
-async def analyze(file: UploadFile = File(...), language: str = Form(...)):
-    """First Step: Get Prediction + Gemini Text"""
-
+async def analyze(file: UploadFile = File(...)):
+    """
+    Step 1: Lightweight Classification
+    Only runs the local VGG16 model. Returns JSON immediately.
+    """
     if model is None:
         raise HTTPException(status_code=500, detail="Model not loaded.")
 
@@ -100,145 +128,192 @@ async def analyze(file: UploadFile = File(...), language: str = Form(...)):
         img = Image.open(io.BytesIO(contents)).convert('RGB')
         img = img.resize((224, 224))
         
-        # 1. Convert to array
+        # 1. Preprocessing (Your existing logic)
         img_array = np.array(img).astype(np.float32)
-        
-        # 2. Add batch dimension
         img_array = np.expand_dims(img_array, axis=0)
-
-        # 3. USE OFFICIAL VGG16 PREPROCESSING
-        # This is more reliable than just / 255.0
         img_array = preprocess_input(img_array)
 
-        # 4. Get Prediction
+        # 2. Prediction
         predictions = model.predict(img_array)
         score = float(predictions[0][0])
         
-        # DEBUG: Print this to your terminal to see the actual math
         print(f"DEBUG: Raw model score is {score}")
 
-        # 5. LABELS (Adjust based on your test results)
-        # If a known cancerous image gives a score NEAR 0: Swap these.
-        # Current Logic: 0 = Non-Cancerous, 1 = Cancerous
+        # 3. Label Logic
         if score > 0.5:
             label = "Cancerous"
             confidence = score
         else:
             label = "Non-Cancerous"
             confidence = 1 - score
+
+        # Return JSON only - NO Gemini call here
+        return {
+            "prediction": label,
+            "confidence": confidence
+        }
+
+    except Exception as e:
+        print(f"Prediction Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/generate_report")
+async def generate_report(
+    file: UploadFile = File(...),
+    prediction: str = Form(...),
+    confidence: float = Form(...),
+    language: str = Form(...),
+    report_type: str = Form(...)
+):
+    """
+    Step 2: Heavy Generation (On Demand)
+    Calls Gemini API -> Generates PDF/Word -> Returns File
+    """
+    try:
+        # 1. Read the image again for Gemini context
+        contents = await file.read()
+
+        # 2. Construct the Gemini Prompt (Moved from analyze)
         prompt = f"""
-ACT AS: An expert Dermatologist and Medical Consultant.
-CONTEXT: A patient has uploaded a dermoscopic image for skin lesion analysis. 
-AI MODEL RESULT: The local analysis model has classified the lesion as '{label}' with a confidence of {confidence*100:.2f}%.
+        ACT AS: An expert Dermatologist and Medical Consultant.
+        CONTEXT: A patient has uploaded a dermoscopic image for skin lesion analysis. 
+        AI MODEL RESULT: The local analysis model has classified the lesion as '{prediction}' with a confidence of {float(confidence)*100:.2f}%.
 
-TASK: Generate a comprehensive medical analysis report in {language}. 
+        TASK: Generate a comprehensive medical analysis report in {language}. 
 
-REPORT STRUCTURE (Use Markdown):
-1. ## Patient Report Summary
-   - State the classification result clearly.
-   - Explain what '{label}' generally means in simple terms.
-2. ## Clinical Observations
-   - Based on the image analysis, describe what clinical features a specialist would look for (e.g., symmetry, borders, color variations).
-3. ## Recommendations & Next Steps
-   - Provide clear actionable advice (e.g., "Monitor for changes using the ABCDE rule", "Consult a specialist for a biopsy", "Annual skin checks").
-4. ## Important Disclaimer
-   - Include a standard medical disclaimer: This is an AI-generated report for educational purposes and NOT a final diagnosis.
+        REPORT STRUCTURE (Use Markdown):
+        1. ## Patient Report Summary
+           - State the classification result clearly.
+           - Explain what '{prediction}' generally means in simple terms.
+        2. ## Clinical Observations
+           - Based on the image analysis, describe what clinical features a specialist would look for (e.g., symmetry, borders, color variations).
+        3. ## Recommendations & Next Steps
+           - Provide clear actionable advice (e.g., "Monitor for changes using the ABCDE rule", "Consult a specialist for a biopsy", "Annual skin checks").
+        4. ## Important Disclaimer
+           - Include a standard medical disclaimer: This is an AI-generated report for educational purposes and NOT a final diagnosis.
 
-TONE: Professional, supportive, and clinical.
-FORMATTING: Use clear headings, bullet points, and bold text for emphasis.
-"""
-    
+        TONE: Professional, supportive, and clinical.
+        FORMATTING: Use clear headings, bullet points, and bold text for emphasis.
+        """
+
+        # 3. Call Gemini API
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=[types.Part.from_bytes(data=contents, mime_type="image/jpeg"), prompt]
         )
-        
-        return {
-            "prediction": label,
-            "confidence": confidence,
-            "report_text": response.text
-        }
-    except Exception as e:
-        print(f"Prediction Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-    
-class PDF(FPDF):
-    def header(self):
-        self.set_font("Arial", "B", 12)
-        self.cell(0, 10, "AI Medical Analysis Report", border=False, ln=True, align="C")
-        self.ln(5)
+        report_text = response.text
 
-@app.post("/generate_report")
-async def generate_report(
-    report_text: str = Form(...), 
-    report_type: str = Form(...),
-    label: str = Form(...),
-    confidence: float = Form(...)
-):
-    if report_type == "pdf":
-        pdf = PDF()
-        pdf.add_page()
-        
-        # 1. Add the Result Summary
-        pdf.set_font("Arial", 'B', 14)
-        color = (220, 38, 38) if label.lower() == "cancerous" else (22, 163, 74)
-        pdf.set_text_color(*color)
-        pdf.cell(0, 10, f"Analysis Result: {label.upper()}", ln=True)
-        
-        pdf.set_font("Arial", size=11)
-        pdf.set_text_color(0, 0, 0)
-        pdf.cell(0, 10, f"Confidence Score: {float(confidence)*100:.2f}%", ln=True)
-        pdf.ln(5)
-        pdf.line(10, pdf.get_y(), 200, pdf.get_y()) # Horizontal line
-        pdf.ln(5)
+        # --- EXISTING PDF/WORD GENERATION LOGIC PRESERVED BELOW ---
 
-        # 2. Convert Markdown to HTML for Rendering
-        # Gemini's markdown is converted to basic HTML tags (<b>, <h1>, <ul>)
-        html_content = markdown(report_text)
-        
-        # Clean up some common markdown-to-html issues for FPDF
-        pdf.set_font("Arial", size=10)
-        pdf.write_html(html_content)
+        FONT_PATH = "fonts/Amiri-Regular.ttf" 
 
-        # 3. Finalize and Return Bytes
-        # In fpdf2, output() returns bytes directly
-        pdf_bytes = pdf.output()
+        if report_type == "pdf":
+            pdf = PDF()
             
-        return StreamingResponse(
-            io.BytesIO(pdf_bytes), 
-            media_type="application/pdf",
-            headers={
-                "Content-Disposition": "attachment; filename=Report.pdf",
-                "Cache-Control": "no-cache"
-            }
-        )    
-    # Word logic remains standard
-    if report_type == "word":
-        doc = Document()
-        
-        # Add Header/Title
-        title = doc.add_heading('Medical Analysis Report', 0)
-        title.alignment = 1 # Center
-        
-        # Add Summary Box
-        p = doc.add_paragraph()
-        run = p.add_run(f"FINAL RESULT: {label.upper()}")
-        run.bold = True
-        run.font.size = 140000 # Approx 14pt
-        
-        doc.add_paragraph(f"Confidence Score: {float(confidence)*100:.2f}%")
-        doc.add_section() # Divider
+            # 1. REGISTER THE FONT (Crucial Step)
+            # You need a .ttf file that supports Arabic.
+            try:
+                pdf.add_font('ArabicFont', '', FONT_PATH, uni=True)
+                pdf.add_font('ArabicFont', 'B', FONT_PATH, uni=True)
+            except FileNotFoundError:
+                raise HTTPException(status_code=500, detail="Font file not found. Please add Amiri-Regular.ttf to your project.")
 
-        # Render Markdown Content
-        add_markdown_to_word(doc, report_text)
+            pdf.add_page()
+            
+            # 2. Add Result Summary
+            pdf.set_font("ArabicFont", '', 14)
+            
+            # Fix text direction for the Label
+            display_label = fix_text(prediction.upper()) if language == "Arabic" else prediction.upper()
 
-        # Save to BytesIO
-        out = io.BytesIO()
-        doc.save(out)
-        out.seek(0)
+            color = (220, 38, 38) if prediction.lower() == "cancerous" else (22, 163, 74)
+            pdf.set_text_color(*color)
+            pdf.cell(0, 10, f"Analysis Result: {display_label}", ln=True, align='R' if language == "Arabic" else 'L')
+            
+            pdf.set_font("ArabicFont", '', 11)
+            pdf.set_text_color(0, 0, 0)
+            pdf.cell(0, 10, f"Confidence Score: {float(confidence)*100:.2f}%", ln=True, align='R' if language == "Arabic" else 'L')
+            
+            pdf.ln(5)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(5)
 
-        return StreamingResponse(
-            out, 
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": "attachment; filename=Analysis_Report.docx"}
-        )
+            # 3. Handle The Main Report Text
+            # HTML conversion + Arabic is very buggy in FPDF.
+            # It is safer to write it as standard MultiCell text for Arabic to ensure characters connect.
+            
+            pdf.set_font("ArabicFont", '', 11)
+            
+            if language == "Arabic":
+                # For Arabic, we clean markdown syntax (*, #) because simple FPDF text doesn't render MD
+                clean_text = report_text.replace("**", "").replace("##", "").replace("- ", "• ")
+                
+                # Fix Directionality
+                fixed_text = fix_text(clean_text)
+                
+                # Write aligned to Right
+                pdf.multi_cell(0, 10, fixed_text, align='R')
+            else:
+                # Non-Arabic languages can use the HTML renderer
+                html_content = markdown(report_text)
+                pdf.write_html(html_content)
+
+            pdf_bytes = pdf.output()
+                
+            return StreamingResponse(
+                io.BytesIO(pdf_bytes), 
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": "attachment; filename=Report.pdf",
+                    "Cache-Control": "no-cache"
+                }
+            )    
+
+        # --- WORD DOCUMENT SUPPORT ---
+        if report_type == "word":
+            doc = Document()
+            
+            # Add Header
+            title = doc.add_heading('Medical Analysis Report', 0)
+            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            # Summary
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if language == "Arabic" else WD_ALIGN_PARAGRAPH.LEFT
+
+            run = p.add_run(f"FINAL RESULT: {prediction.upper()}")
+            run.bold = True
+            run.font.size = 140000 
+            
+            # Enable RTL for the run if needed
+            if language == "Arabic":
+                p.paragraph_format.bidi = True
+            
+            doc.add_paragraph(f"Confidence Score: {float(confidence)*100:.2f}%")
+            doc.add_section()
+
+            # Content
+            # python-docx handles Unicode automatically, but we need to set RTL direction
+            
+            # Simple markdown stripper for Word (or use a library like 'markdown2docx')
+            lines = report_text.split('\n')
+            for line in lines:
+                if line.strip():
+                    para = doc.add_paragraph(line.replace("**", "").replace("##", ""))
+                    if language == "Arabic":
+                        para.paragraph_format.bidi = True # Sets RTL direction
+                        para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+
+            out = io.BytesIO()
+            doc.save(out)
+            out.seek(0)
+
+            return StreamingResponse(
+                out, 
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                headers={"Content-Disposition": "attachment; filename=Analysis_Report.docx"}
+            )
+
+    except Exception as e:
+        print(f"Report Generation Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About | MedAI Analysis</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+
+<body>
+
+    <nav class="navbar">
+        <a href="index.html" class="nav-brand">
+            <i class="fa-solid fa-heart-pulse"></i> MedAI
+        </a>
+        <div class="nav-links">
+            <a href="index.html">Analyzer</a>
+            <a href="about.html" class="active">About Model</a>
+            <a href="contact.html">Contact Support</a>
+        </div>
+    </nav>
+
+    <div class="main-content">
+        <div class="card" style="text-align: left; max-width: 800px;">
+            <h2 style="color: var(--primary); margin-bottom: 1rem;">About Our Technology</h2>
+            <p>Our application utilizes a <strong>VGG16 Convolutional Neural Network (CNN)</strong> for the initial
+                image classification. This model has been trained on thousands of dermatoscopic images to distinguish
+                between benign and malignant lesions.</p>
+            <br>
+            <h3>How it works:</h3>
+            <ul style="margin-left: 20px; margin-top: 10px; color: var(--secondary);">
+                <li><strong>Step 1:</strong> Image preprocessing (Resizing to 224x224).</li>
+                <li><strong>Step 2:</strong> Feature extraction using VGG16 layers.</li>
+                <li><strong>Step 3:</strong> Classification (Confidence score calculation).</li>
+                <li><strong>Step 4:</strong> Generative AI (Gemini) creates a readable medical explanation.</li>
+            </ul>
+        </div>
+    </div>
+
+</body>
+
+</html>
